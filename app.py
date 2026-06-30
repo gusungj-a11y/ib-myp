@@ -1,0 +1,309 @@
+import streamlit as st
+import pandas as pd
+import requests
+
+# --- 웹사이트 기본 디자인 설정 ---
+st.set_page_config(page_title="IB MYP 플래너 및 점검 대시보드", layout="wide", initial_sidebar_state="expanded")
+
+# --- 💡 [중요] 구글 스프레드시트 연동 주소 ---
+# Streamlit Cloud에 배포할 때는 .streamlit/secrets.toml 에 저장한 값을 불러옵니다.
+# 로컬에서 테스트할 때는 secrets.toml이 없으면 아래 기본값을 그대로 사용합니다.
+try:
+    GOOGLE_SHEET_API_URL = st.secrets["GOOGLE_SHEET_API_URL"]
+except Exception:
+    GOOGLE_SHEET_API_URL = "선생님의_구글_앱스_스크립트_웹앱_주소_여기에_붙여넣기"
+
+REQUIRED_COLUMNS = ["과목", "세부과목", "유닛명", "주요개념", "관련개념", "세계적맥락", "평가영역"]
+
+# --- 최상단 제작자 및 타이틀 표시 ---
+st.markdown(
+    "<p style='text-align: right; color: #7f8c8d; font-size: 15px; font-weight: bold; margin-bottom: 0px;'>"
+    "🛠️ 제작: 충주미덕중학교 정구성</p>",
+    unsafe_allow_html=True,
+)
+st.title("🏫 IB MYP 유닛 플래너 및 점검 대시보드")
+st.markdown("---")
+
+# --- IB MYP 교과 데이터 ---
+subject_data = {
+    "언어와 문학": {
+        "kc": ["의사소통", "창의성", "연결", "관점"],
+        "rc": {"일반": ["주요 대상", "등장인물", "맥락", "장르", "상호텍스트성", "시점", "목적", "자기표현", "배경", "구조", "문체", "주제"]}
+    },
+    "언어 습득": {
+        "kc": ["의사소통", "연결", "창의성", "문화"],
+        "rc": {"일반": ["발음", "대상 맥락", "관습", "형식", "기능", "의미", "메시지", "유형", "목적", "구조", "단어 선택", "공감", "관용표현", "시점", "주장", "편견", "추론", "문체적 선택", "주제", "어투"]}
+    },
+    "개인과 사회": {
+        "kc": ["변화", "시스템", "세계적 상호작용", "시간·장소 및 공간"],
+        "rc": {
+            "통합된 인문학": ["인과 관계", "선택", "문화", "형평성", "세계화", "정체성", "혁신과 혁명", "관점", "권력", "과정", "자원", "지속가능성"],
+            "역사": ["인과 관계", "문명", "갈등", "협동", "문화", "통치 체제", "정체성", "이념", "혁신과 혁명", "상호 의존성", "관점", "의의"],
+            "지리": ["인과 관계", "문화", "격차와 형평성", "다양성", "세계화", "관리와 개입", "연결망", "패턴과 추세", "권력", "과정", "규모", "지속가능성"],
+            "경제학": ["선택", "소비", "형평성", "세계화", "성장", "모델", "빈곤", "권력", "자원", "부족", "지속가능성", "무역"],
+            "철학": ["타성", "존재와 되기", "신념", "인과 관계", "인간 본성", "정체성", "지식", "자유", "마음/몸", "객관성/주관성", "연결", "가치"],
+            "경영관리": ["인과 관계", "경쟁", "협동", "문화", "윤리", "세계화", "혁신", "리더십", "권력", "과정", "전략", "구조"],
+            "심리학": ["행동", "유대", "인지", "의식", "발달", "무질서", "집단", "학습", "정신 건강", "정신", "증상", "무의식"],
+            "사회학/인류학": ["주체성", "공동체", "문화", "정체성", "제도", "의미", "규범", "사회적 교류", "사회화", "사회적 지위", "구조", "주관성"],
+            "정치 과학/시민/정부": ["권위", "시민권", "갈등", "협동", "세계화", "정부", "이념", "통합", "상호 의존성", "리더십", "권력", "권리"],
+            "세계종교": ["권위", "신념", "신", "운명", "교리", "도덕", "종교적 감정", "의식과 의례", "신성함", "상징주의", "전통", "예배"]
+        }
+    },
+    "체육과 보건": {
+        "kc": ["변화", "의사소통", "관계"],
+        "rc": {"일반": ["조정", "균형", "선택", "에너지", "환경", "기능", "상호작용", "운동", "관점", "개선", "공간", "시스템"]}
+    },
+    "과학": {
+        "kc": ["변화", "관계", "시스템"],
+        "rc": {
+            "통합 과학/생물학": ["균형", "결과", "에너지", "환경", "증거", "형태", "기능", "상호작용", "모델", "운동", "유형", "변형"],
+            "화학": ["균형", "조건", "결과", "에너지", "증거", "형태", "기능", "상호작용", "모델", "운동", "유형", "전이"],
+            "물리학": ["결과", "발전", "에너지", "환경", "증거", "형태", "기능", "상호작용", "모델", "운동", "유형", "변환"]
+        }
+    },
+    "수학": {
+        "kc": ["관계", "형식", "논리"],
+        "rc": {"일반": ["변화", "동치성", "일반화", "타당성", "근사", "모델", "패턴", "수량", "표현", "단순화", "공간", "시스템"]}
+    },
+    "예술": {
+        "kc": ["변화", "정체성", "미학"],
+        "rc": {
+            "공연 예술": ["관객", "경계", "구성", "표현", "장르", "혁신", "해석", "서사", "연극", "형식", "역할", "구조"],
+            "시각 예술": ["관객", "경계", "구성", "표현", "장르", "혁신", "해석", "서사", "형식", "묘사", "특징", "시각문화"]
+        }
+    },
+    "디자인": {
+        "kc": ["의사소통", "시스템", "공동체", "개발"],
+        "rc": {"일반": ["조정", "협력", "인체 공학", "평가", "형태", "기능", "혁신", "발명", "시장과 트렌드", "관점", "자원", "지속가능성"]}
+    }
+}
+global_contexts = ["정체성과 관계성", "시공간적 맥락", "개인적/문화적 표현", "과학과 기술의 혁신", "세계화와 지속가능성", "공정과 발달"]
+criteria_list = ["Criterion A", "Criterion B", "Criterion C", "Criterion D"]
+
+
+def is_google_sheet_connected() -> bool:
+    return bool(GOOGLE_SHEET_API_URL) and "여기에" not in GOOGLE_SHEET_API_URL
+
+
+# --- 데이터 로드 기능 (구글 시트 연동) ---
+if "temp_db" not in st.session_state:
+    st.session_state.temp_db = pd.DataFrame(columns=REQUIRED_COLUMNS)
+
+if "gs_status" not in st.session_state:
+    st.session_state.gs_status = None  # "connected" | "error" | None
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_from_google_sheet(url: str):
+    response = requests.get(url, timeout=10)
+    response.raise_for_status()
+    data = response.json()
+    df = pd.DataFrame(data)
+    for col in REQUIRED_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    return df[REQUIRED_COLUMNS]
+
+
+def load_data() -> pd.DataFrame:
+    if is_google_sheet_connected():
+        try:
+            df = fetch_from_google_sheet(GOOGLE_SHEET_API_URL)
+            st.session_state.gs_status = "connected"
+            return df
+        except Exception:
+            st.session_state.gs_status = "error"
+            return st.session_state.temp_db
+    st.session_state.gs_status = None
+    return st.session_state.temp_db
+
+
+db_current = load_data()
+
+# --- 연동 상태 안내 배너 ---
+if st.session_state.gs_status == "connected":
+    st.success("🟢 구글 시트에 연결되어 실시간으로 저장 중입니다.", icon="✅")
+elif st.session_state.gs_status == "error":
+    st.warning("🟡 구글 시트 연결에 실패해 이번 세션 동안 임시로만 저장됩니다. URL을 확인해주세요.", icon="⚠️")
+else:
+    st.info("⚪ 구글 시트가 연동되어 있지 않습니다. 데이터는 이 브라우저 세션에만 임시 저장됩니다.", icon="ℹ️")
+
+# --- 메뉴 상태 초기화 ---
+if "menu" not in st.session_state:
+    st.session_state.menu = "✨ 유닛 새로 만들기"
+
+# --- 사이드바 메뉴 레이아웃 ---
+st.sidebar.markdown("<h3 style='color: #2c3e50;'>🏫 미덕중 플래너</h3>", unsafe_allow_html=True)
+menu_options = ["✨ 유닛 새로 만들기", "📘 개별 과목 오버뷰", "🚨 누락 핵심요소 점검"]
+
+for option in menu_options:
+    if st.sidebar.button(option, use_container_width=True):
+        st.session_state.menu = option
+        st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.caption(f"현재 등록된 총 유닛 수: {len(db_current)}개")
+
+if is_google_sheet_connected() and st.sidebar.button("🔄 구글 시트 새로고침", use_container_width=True):
+    fetch_from_google_sheet.clear()
+    st.rerun()
+
+# 엑셀 다운로드 버튼
+if len(db_current) > 0:
+    csv_data = db_current.to_csv(index=False).encode("utf-8-sig")
+    st.sidebar.download_button(
+        label="📥 전체 데이터 백업 (CSV)",
+        data=csv_data,
+        file_name="2026_미덕중_IB_MYP_매핑_결과.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+# ==========================================
+# 1. 유닛 새로 만들기 페이지
+# ==========================================
+if st.session_state.menu == "✨ 유닛 새로 만들기":
+    st.subheader("✨ 새로운 유닛을 설계합니다.")
+    selected_subject = st.selectbox("어떤 과목의 유닛을 만드시나요?", ["과목을 선택해주세요..."] + list(subject_data.keys()))
+
+    if selected_subject != "과목을 선택해주세요...":
+        st.markdown("---")
+        sub_subject = "일반"
+        if len(subject_data[selected_subject]["rc"]) > 1:
+            sub_subject = st.selectbox("👉 세부 과목을 선택해주세요", list(subject_data[selected_subject]["rc"].keys()))
+
+        unit_name = st.text_input("📝 유닛명을 입력해주세요")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            kc = st.selectbox("🔑 주요 개념 (Key Concept)", subject_data[selected_subject]["kc"])
+            gc = st.selectbox("🌍 세계적 맥락 (Global Context)", global_contexts)
+        with col2:
+            rc = st.multiselect("🔗 관련 개념 (Related Concepts)", subject_data[selected_subject]["rc"][sub_subject])
+            crit = st.multiselect("🎯 평가 영역 (Criteria)", criteria_list)
+
+        if st.button("💾 저장하고 과목 오버뷰로 이동하기", type="primary", use_container_width=True):
+            if not unit_name or len(rc) == 0 or len(crit) == 0:
+                st.warning("유닛명, 관련 개념, 평가 영역을 모두 입력해주세요!")
+            else:
+                new_data = {
+                    "과목": selected_subject,
+                    "세부과목": sub_subject if sub_subject != "일반" else "없음",
+                    "유닛명": unit_name,
+                    "주요개념": kc,
+                    "관련개념": ", ".join(rc),
+                    "세계적맥락": gc,
+                    "평가영역": ", ".join(crit),
+                }
+
+                saved_to_google = False
+                if is_google_sheet_connected():
+                    try:
+                        res = requests.post(GOOGLE_SHEET_API_URL, json=new_data, timeout=10)
+                        if res.status_code == 200:
+                            saved_to_google = True
+                            fetch_from_google_sheet.clear()
+                    except Exception:
+                        pass
+
+                if not saved_to_google:
+                    new_row = pd.DataFrame([new_data])
+                    st.session_state.temp_db = pd.concat([st.session_state.temp_db, new_row], ignore_index=True)
+                    if is_google_sheet_connected():
+                        st.toast("⚠️ 구글 시트 저장에 실패해 임시 저장소에 저장했습니다.", icon="⚠️")
+
+                st.success("유닛이 안전하게 기록되었습니다!")
+                st.session_state.menu = "📘 개별 과목 오버뷰"
+                st.rerun()
+
+# ==========================================
+# 2. 개별 과목 오버뷰 페이지
+# ==========================================
+elif st.session_state.menu == "📘 개별 과목 오버뷰":
+    st.subheader("📘 과목별 유닛 상세 내역")
+
+    subject_to_view = st.selectbox("조회할 과목을 선택하세요", list(subject_data.keys()))
+    df_sub = db_current[db_current["과목"] == subject_to_view]
+
+    if len(df_sub) == 0:
+        st.info(f"아직 '{subject_to_view}' 과목에 등록된 유닛이 없습니다.")
+    else:
+        st.dataframe(df_sub[["세부과목", "유닛명", "주요개념", "관련개념", "세계적맥락", "평가영역"]], use_container_width=True)
+
+# ==========================================
+# 3. 누락 핵심요소 점검 페이지
+# ==========================================
+elif st.session_state.menu == "🚨 누락 핵심요소 점검":
+    st.subheader("🚨 교육과정 누락 요소 점검 대시보드")
+
+    if len(db_current) == 0:
+        st.info("아직 등록된 유닛이 없습니다. 유닛을 먼저 생성해주세요.")
+    else:
+        st.markdown("#### 1️⃣ 전 교과 통합 유닛 목록")
+        st.dataframe(db_current[["과목", "유닛명", "주요개념", "관련개념", "세계적맥락", "평가영역"]], use_container_width=True, height=200)
+
+        st.markdown("---")
+        st.markdown("#### 2️⃣ 과목별 편식(미반영 요소) 점검")
+
+        check_subject = st.selectbox("📌 점검할 과목을 선택하세요", list(subject_data.keys()))
+
+        master_kc = subject_data[check_subject]["kc"]
+        master_rc = []
+        for rc_list in subject_data[check_subject]["rc"].values():
+            master_rc.extend(rc_list)
+        master_rc = list(set(master_rc))
+
+        master_gc = global_contexts
+        master_crit = criteria_list
+
+        df_check = db_current[db_current["과목"] == check_subject]
+
+        used_kc = df_check["주요개념"].tolist()
+        used_gc = df_check["세계적맥락"].tolist()
+
+        used_rc = []
+        for rc_str in df_check["관련개념"]:
+            used_rc.extend([x.strip() for x in str(rc_str).split(",")])
+
+        used_crit = []
+        for crit_str in df_check["평가영역"]:
+            used_crit.extend([x.strip() for x in str(crit_str).split(",")])
+
+        missing_kc = [kc for kc in master_kc if kc not in used_kc]
+        missing_rc = [rc for rc in master_rc if rc not in used_rc]
+        missing_gc = [gc for gc in master_gc if gc not in used_gc]
+        missing_crit = [c for c in master_crit if c not in used_crit]
+
+        st.write("")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("##### 🔑 누락된 **주요 개념**")
+            if missing_kc:
+                st.error(", ".join(missing_kc))
+            else:
+                st.success("🎉 완벽합니다! 모두 반영되었습니다.")
+
+        with col2:
+            st.markdown("##### 🔗 누락된 **관련 개념**")
+            if missing_rc:
+                st.warning(", ".join(missing_rc))
+            else:
+                st.success("🎉 완벽합니다! 모두 반영되었습니다.")
+
+        st.write("")
+
+        col3, col4 = st.columns(2)
+        with col3:
+            st.markdown("##### 🌍 누락된 **세계적 맥락**")
+            if missing_gc:
+                st.error(", ".join(missing_gc))
+            else:
+                st.success("🎉 완벽합니다! 모두 반영되었습니다.")
+
+        with col4:
+            st.markdown("##### 🎯 누락된 **평가 영역**")
+            if missing_crit:
+                st.warning(", ".join(missing_crit))
+            else:
+                st.success("🎉 완벽합니다! 모두 반영되었습니다.")

@@ -1,0 +1,10 @@
+# secrets.toml에는 구글 시트 URL이 들어있으므로 절대 GitHub에 올리지 않습니다.
+.streamlit/secrets.toml
+
+# 파이썬 캐시 파일들
+__pycache__/
+*.pyc
+
+# 가상환경 폴더 (혹시 로컬에 만들었을 경우)
+venv/
+.venv/
